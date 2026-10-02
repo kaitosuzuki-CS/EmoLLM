@@ -1,0 +1,12 @@
+# Pipeline 3 with the supervised contrastive objective.
+base: finetune.yaml
+objective: supcon
+
+train:
+  # Class-balanced batches guarantee positives for every class; batch = 7 * 16 = 112.
+  # (No length bucketing here, so batches pad to the longest clip, up to data.max_seconds.)
+  sampler: class_balanced
+  classes_per_batch: 7
+  samples_per_class: 16
+  eval_batch_size: 64
+  init_head_from: null          # e.g. runs/supcon_<stamp>/best.pt from the frozen pipeline

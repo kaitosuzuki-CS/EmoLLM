@@ -1,0 +1,34 @@
+# Pipeline 2: z -> projector (D), supervised contrastive loss on the normalized latent.
+base: base.yaml
+task: supcon
+
+loss:
+  temperature: 0.1
+  base_temperature: 0.1
+  # total = supcon_weight * SupCon + var_weight * L_var + cov_weight * L_cov
+  # L_var / L_cov (VICReg) act on the raw D-dim projector output, SupCon on its L2 norm.
+  # Set var_weight and cov_weight to 0 for plain SupCon.
+  supcon_weight: 1.0
+  var_weight: 1.0         # L_var = 1/d * sum_j max(0, gamma - std(h_j))
+  cov_weight: 0.04        # L_cov = 1/d * sum_{i!=j} C(h)_ij^2
+  var_gamma: 1.0          # target per-dimension std
+  var_eps: 1.0e-4         # std = sqrt(Var + eps)
+
+train:
+  epochs: 100
+  # Class-balanced batches guarantee every anchor has positives, including
+  # disgust/fear (~2.7% of MELD each). Batch size = 7 * 32 = 224.
+  sampler: class_balanced
+  classes_per_batch: 7
+  samples_per_class: 32
+  batch_size: 256          # used for the eval loaders
+  lr: 1.0e-3
+  select_metric: weighted_f1   # computed from kNN on the validation set
+
+eval:
+  knn_k: 20
+  knn_temperature: 0.07
+  linear_probe: true       # fit logistic regression on the best checkpoint's representation
+  save_probe: false        # save the probe as nn.Linear weights to <run_dir>/linear_probe.pt
+  probe_C: 1.0
+  probe_class_weight: null # null | balanced

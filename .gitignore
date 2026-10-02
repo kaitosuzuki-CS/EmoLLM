@@ -1,0 +1,20 @@
+# data, caches and experiment outputs
+data/
+runs/
+wandb/
+*.pt
+*.safetensors
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store

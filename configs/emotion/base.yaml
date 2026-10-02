@@ -1,0 +1,81 @@
+# Shared settings for the emotion-model pipelines. Task configs set `base: base.yaml` and
+# override what they need. Any key can be overridden on the command line:
+#   python scripts/emotion/train_classifier.py --config configs/emotion/classification.yaml train.lr=1e-3
+# Paths reference `data_root`, so `data_root=/path/to/meld` relocates all data.
+
+seed: 42
+device: cuda
+num_threads: 8            # CPU threads for torch
+data_root: data/meld      # holds MELD.Raw/ (downloaded) plus everything generated below
+output_dir: runs          # run directories: <output_dir>/<task>_<timestamp>
+profile: true             # params / FLOPs / timings -> <run>/stats.json and checkpoints
+
+data:
+  train_split: train      # split used for training (and as the kNN bank)
+  val_split: dev          # split used for validation / model selection
+  splits:                 # per split: MELD clips + labels in; wavs, manifest and feature caches out
+    train:
+      video_dir: ${data_root}/MELD.Raw/train_splits
+      label_csv: ${data_root}/MELD.Raw/train_sent_emo.csv
+      wav_dir: ${data_root}/wav16k/train                      # scripts/data/prepare_audio.py
+      manifest: ${data_root}/wav16k/train_manifest.csv        # scripts/data/prepare_audio.py
+      embedding_cache: ${data_root}/cache/emotion2vec_plus_base_train.pt         # scripts/data/extract_embeddings.py
+      frame_cache: ${data_root}/cache/emotion2vec_plus_base_train_frames.pt      # ... --frames
+    dev:
+      video_dir: ${data_root}/MELD.Raw/dev_splits_complete
+      label_csv: ${data_root}/MELD.Raw/dev_sent_emo.csv
+      wav_dir: ${data_root}/wav16k/dev
+      manifest: ${data_root}/wav16k/dev_manifest.csv
+      embedding_cache: ${data_root}/cache/emotion2vec_plus_base_dev.pt
+      frame_cache: ${data_root}/cache/emotion2vec_plus_base_dev_frames.pt
+    test:                 # held-out test set (the folder's ._* and final_videos_test* files are repeats; only dia<D>_utt<U>.mp4 is read)
+      video_dir: ${data_root}/MELD.Raw/output_repeated_splits_test
+      label_csv: ${data_root}/MELD.Raw/test_sent_emo.csv
+      wav_dir: ${data_root}/wav16k/test
+      manifest: ${data_root}/wav16k/test_manifest.csv
+      embedding_cache: ${data_root}/cache/emotion2vec_plus_base_test.pt
+      frame_cache: ${data_root}/cache/emotion2vec_plus_base_test_frames.pt
+  use_cache: true         # true: train on cached z / frames; false: run the encoder every batch
+  sample_rate: 16000
+  min_seconds: 0.1        # drop clips shorter than this when building the manifest
+  max_seconds: 20.0       # crop longer clips (random crop in train, first N s in eval)
+  eval_max_seconds: null  # crop for evaluation passes; null = max_seconds
+  num_workers: 8          # DataLoader workers for raw audio
+
+encoder:
+  model: iic/emotion2vec_plus_base   # ModelScope id (Hugging Face: emotion2vec/emotion2vec_plus_base)
+  hub: ms                            # ms | hf
+  embed_dim: 768                     # dim of z
+  autocast_bf16: false               # fp32 matches FunASR exactly; bf16 is ~2x faster (cos > 0.999)
+  extract_batch_size: 32             # batch size for scripts/data/extract_embeddings.py
+
+pooling:                  # frames -> utterance embedding z
+  type: mean              # mean | attention (attention + use_cache needs the frame cache)
+  hidden_dim: 128         # attention scorer: Linear(768, hidden) -> tanh -> Linear(hidden, 1)
+
+model:
+  hidden_dim: 512         # z -> Linear -> GELU -> Linear -> D
+  out_dim: 256            # D
+  dropout: 0.1            # dropout after GELU
+
+train:
+  epochs: 50
+  batch_size: 128
+  sampler: random         # random | class_balanced | length_bucketed
+  classes_per_batch: 7    # class_balanced only
+  samples_per_class: 16   # class_balanced only (batch = classes_per_batch * samples_per_class)
+  lr: 1.0e-3
+  weight_decay: 1.0e-2
+  warmup_epochs: 2
+  grad_clip: 1.0
+  log_every: 20           # steps
+  eval_every: 1           # epochs
+
+wandb:
+  enabled: true
+  project: emotion2vec-meld
+  entity: null            # W&B user or team; null = your default entity
+  name: null              # null = the run directory name
+  group: null             # null = task (classification | supcon | finetune)
+  tags: []
+  mode: online            # online | offline | disabled

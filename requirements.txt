@@ -1,0 +1,17 @@
+# Training / evaluation environment (Python 3.10). Versions used to produce RESULTS.md.
+# Also needs ffmpeg on PATH (e.g. `conda install -c conda-forge ffmpeg`) for scripts/data/prepare_audio.py.
+torch==2.14.0
+torchaudio==2.11.0
+funasr==1.4.16
+modelscope==1.40.1
+transformers==5.17.0
+peft==0.21.1
+openai==3.22.1
+numpy==2.2.6
+pandas==2.3.3
+scikit-learn==1.7.2
+soundfile==0.14.0
+PyYAML==6.0.3
+tqdm==4.70.1
+matplotlib==3.10.9
+wandb==0.30.0

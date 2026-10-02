@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emotion-llm"
+version = "0.1.0"
+description = "Speech emotion embeddings (emotion2vec+) on MELD and an emotion-conditioned LLM trained with SFT and GRPO"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.14",
+    "torchaudio>=2.11",
+    "funasr>=1.4.16",
+    "modelscope",
+    "transformers>=5.17",
+    "peft>=0.21",
+    "openai>=3.0",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "soundfile",
+    "pyyaml",
+    "tqdm",
+    "matplotlib",
+    "wandb",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+demo = ["sounddevice"]   # microphone input for scripts/llm/chat.py (needs the PortAudio library)
+
+[tool.setuptools]
+packages = ["emotion", "emollm"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501", "E731"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["emotion", "emollm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,5 @@
+# Separate serving environment for the judge LLMs (Python 3.12). vLLM pins its own torch,
+# so keep it apart from the training environment; the two talk over HTTP.
+vllm==0.30.0
+transformers==5.10.4   # newer releases drop a class vLLM 0.30 needs for Mistral-Small-3.2
+ninja                  # JIT-compiled kernels

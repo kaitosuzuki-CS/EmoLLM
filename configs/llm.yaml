@@ -1,0 +1,144 @@
+# Emotion-conditioned LLM: frozen emotion model -> emotion latent -> K soft-prompt tokens
+# for a LoRA-tuned small instruct LLM, trained with SFT on judge-made pseudo labels, then GRPO
+# with judge rewards. Override any key on the CLI:  key=value
+
+seed: 42
+device: cuda
+num_threads: 8
+data_root: data/meld      # same layout as configs/emotion/base.yaml
+output_dir: runs
+param_budget: 6.0e+9     # whole pipeline (emotion model + projector + LLM + LoRA) must stay below
+
+emotion:
+  # Frozen emotion model checkpoint (required by scripts/llm/extract_features.py), e.g.
+  # runs/finetune_<stamp>/best.pt from scripts/emotion/train_finetune.py pooling.type=attention
+  # (the best emotion model in RESULTS.md). SFT / GRPO read it from the feature cache.
+  checkpoint: null
+  feature: h              # h: 256-d projector latent (default) | z: 768-d pooled utterance embedding
+  data_config: configs/emotion/base.yaml   # where each split's audio manifest is (resolved with this data_root)
+  cache_dir: ${data_root}/llm/features   # features_<split>.pt + utterances_<split>.jsonl (scripts/llm/extract_features.py)
+  batch_size: 32
+
+data:
+  splits:                 # MELD transcript CSVs; audio comes from the emotion config's manifests
+    train: ${data_root}/MELD.Raw/train_sent_emo.csv
+    dev: ${data_root}/MELD.Raw/dev_sent_emo.csv
+    test: ${data_root}/MELD.Raw/test_sent_emo.csv
+  train_split: train
+  val_split: dev
+  context_turns: 5        # previous utterances of the dialogue shown as context
+
+policy:
+  model: Qwen/Qwen2.5-3B-Instruct
+  num_emotion_tokens: 4   # K soft-prompt tokens
+  projector_hidden: 1024  # emotion latent -> Linear(hidden) -> GELU -> Linear(K * llm_hidden)
+  gradient_checkpointing: true
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+prompt:
+  system: >-
+    You are a warm, emotionally intelligent conversational assistant. You are listening to
+    a conversation. Besides the words, you can hear how the speaker sounds: their vocal
+    emotion is given to you as special emotion tokens. Reply directly to the speaker in 1-3
+    short sentences. Acknowledge how they seem to feel when it is relevant, stay grounded in
+    what they said and the conversation, and be natural rather than formulaic. Do not name
+    the emotion tokens or say that you detected an emotion.
+  # Candidate generation for pseudo labels: same task, emotion given as a word
+  candidate_system: >-
+    You are a warm, emotionally intelligent conversational assistant. You are listening to
+    a conversation. Besides the words, you can hear how the speaker sounds: their vocal
+    emotion is given to you as a label. Reply directly to the speaker in 1-3 short
+    sentences. Acknowledge how they seem to feel when it is relevant, stay grounded in what
+    they said and the conversation, and be natural rather than formulaic. Do not state the
+    label or say that you detected an emotion.
+
+generation:               # policy sampling (eval uses greedy unless overridden)
+  max_new_tokens: 96
+  temperature: 0.8
+  top_p: 0.95
+
+judge:                    # OpenAI-compatible server, e.g. `vllm serve` (see docs/reproduce.md)
+  base_url: http://localhost:8000/v1
+  model: Qwen/Qwen2.5-32B-Instruct
+  max_concurrency: 32
+  timeout_s: 300
+  temperature: 0.0
+  max_tokens: 400
+
+pairwise_judge:           # held-out judge for scripts/llm/evaluate_pairwise.py: a different model family from
+                          # the training judge, so the policy isn't graded by what it was optimized on
+  base_url: http://localhost:8002/v1
+  model: mistralai/Mistral-Small-3.2-24B-Instruct-2506   # ungated; Gemma / Llama need HF access approval
+  max_concurrency: 32
+  timeout_s: 300
+  temperature: 0.0
+  max_tokens: 300
+
+pseudo:                   # SFT pseudo labels (scripts/llm/make_pseudo_labels.py), cached as JSONL
+  candidate_base_url: http://localhost:8001/v1    # base policy model served by vLLM
+  candidate_model: Qwen/Qwen2.5-3B-Instruct
+  num_candidates: 4
+  candidate_temperature: 0.9
+  candidate_emotion_hint: true   # candidates see the emotion as text (the projector is untrained then)
+  out_dir: ${data_root}/llm/pseudo
+  limit: null             # only label the first N utterances per split (quick tests)
+
+sft:
+  epochs: 2               # a 3rd epoch overfits (dev loss rises); the best-dev-loss checkpoint is kept
+  batch_size: 8
+  grad_accum: 4
+  lr: 2.0e-4              # LoRA
+  projector_lr: 1.0e-4    # 1e-3 pushes the soft tokens off-manifold (sampled replies turn to garbage)
+  weight_decay: 0.0
+  warmup_ratio: 0.03
+  max_steps: null         # optimizer steps; null = epochs
+  eval_every: 100         # optimizer steps; the lowest-dev-loss checkpoint becomes the policy
+  eval_batches: 20        # dev batches for the dev loss (null = all)
+  sample_every: 200       # log a few greedy dev generations
+  num_samples: 4
+  log_every: 10
+  train_limit: null       # restrict to the first N labelled train utterances (quick tests)
+
+grpo:
+  init_from: null         # SFT run directory (required)
+  steps: 500              # optimizer steps
+  prompts_per_step: 8
+  group_size: 4           # responses sampled per prompt
+  lr: 1.0e-5
+  projector_lr: 1.0e-5
+  weight_decay: 0.0
+  warmup_steps: 10
+  beta: 0.04              # KL penalty to the SFT reference (k3 estimator)
+  clip_eps: 0.2
+  inner_updates: 1        # PPO-style updates per sampled batch
+  micro_batch: 16         # sequences per forward/backward chunk (memory); null = whole batch
+  temperature: 0.9        # full-vocabulary T=1.0 sampling derails Qwen into multilingual garbage
+  top_p: 0.95
+  max_new_tokens: 96
+  lora_dropout: 0.0       # deterministic log-probs between sampling and update
+  save_every: 50
+  eval_every: 50
+  eval_prompts: 16        # fixed dev prompts scored greedily by the judge
+  log_every: 1
+  reward:                 # total = judge + contrast + PMI bonus. Plain judge reward by default: the
+                          # emotion-specific terms (contrast_weight 0.5, pmi_weight 0.1) made replies slightly
+                          # more emotion-dependent but lost to plain GRPO overall (RESULTS.md)
+    judge_weight: 1.0     # (s_true - 1) / 9
+    contrast_weight: 0.0  # (s_true - s_cf) / 9: judge score under the true emotion minus under a counterfactual one
+    contrast_label: valence   # valence (joy<->sadness, negative->joy, neutral->anger) | random
+    pmi_weight: 0.0       # mean per-token log p(y | true emotion) - log p(y | other-emotion features);
+    pmi_clip: 0.5         #   keep it a tiebreaker: at 0.5 / clip 1.0 it outweighed the judge and GRPO
+                          #   learned short, emotion-word-heavy replies
+
+wandb:
+  enabled: true
+  project: emotion2vec-meld-llm
+  entity: null
+  name: null
+  group: null
+  tags: []
+  mode: online

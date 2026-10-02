@@ -1,0 +1,17 @@
+# Pipeline 1: z -> projector (D) -> linear head, cross-entropy.
+base: base.yaml
+task: classification
+
+model:
+  head_dropout: 0.1        # dropout on the D-dim representation before the linear head
+
+loss:
+  class_weights: inverse_sqrt   # null | inverse | inverse_sqrt  (MELD is ~47% neutral)
+  label_smoothing: 0.1
+
+train:
+  epochs: 50
+  batch_size: 128
+  sampler: random
+  lr: 1.0e-3
+  select_metric: weighted_f1    # acc | weighted_f1 | macro_f1 (weighted F1 is the MELD standard)

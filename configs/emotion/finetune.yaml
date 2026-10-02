@@ -1,0 +1,52 @@
+# Pipeline 3: fine-tune emotion2vec+ end to end (audio loaded per batch).
+base: base.yaml
+task: finetune
+objective: classification   # classification | supcon (see finetune_supcon.yaml)
+
+data:
+  use_cache: false          # required: the encoder runs on raw audio every batch
+  max_seconds: 8.0          # random crop for training clips (median MELD clip is 2.5 s)
+  eval_max_seconds: 20.0    # evaluation crop
+  num_workers: 8
+
+encoder:
+  autocast_bf16: true
+  freeze_feature_extractor: true   # keep the CNN waveform front end frozen (standard for wav2vec-style FT)
+
+model:
+  head_dropout: 0.1
+
+loss:
+  class_weights: inverse_sqrt   # classification only
+  label_smoothing: 0.1          # classification only
+  temperature: 0.1              # supcon only
+  base_temperature: 0.1         # supcon only
+  supcon_weight: 1.0            # supcon only; see configs/emotion/supcon.yaml for the terms
+  var_weight: 1.0               # supcon only; VICReg variance term
+  cov_weight: 0.04              # supcon only; VICReg covariance term
+  var_gamma: 1.0
+  var_eps: 1.0e-4
+
+train:
+  epochs: 10
+  batch_size: 32
+  eval_batch_size: 64
+  sampler: length_bucketed      # random | length_bucketed | class_balanced
+  lr: 1.0e-3                    # projector / head
+  encoder_lr: 2.0e-5            # emotion2vec+ transformer
+  freeze_encoder_epochs: 1      # train only the heads for this many epochs first
+  warmup_epochs: 1              # per param group, counted from when the group starts
+  weight_decay: 1.0e-2
+  grad_clip: 1.0
+  log_every: 20
+  eval_every: 1
+  select_metric: weighted_f1
+  init_head_from: null          # e.g. runs/classification_<stamp>/best.pt from the frozen pipeline
+
+eval:                           # supcon only
+  knn_k: 20
+  knn_temperature: 0.07
+  linear_probe: true
+  save_probe: true              # save the probe as nn.Linear weights to <run_dir>/linear_probe.pt
+  probe_C: 1.0
+  probe_class_weight: null
